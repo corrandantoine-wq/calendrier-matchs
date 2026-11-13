@@ -66,7 +66,6 @@ function pretty(def: any, raw: string | null) {
 Deno.serve(async (req) => {
   if (req.method === "OPTIONS") return new Response("ok", { headers: cors });
   if (req.method !== "POST") return json({ error: "Méthode non autorisée" }, 405);
-  if (!TOKEN) return json({ error: "HubSpot n'est pas encore configuré (secret HUBSPOT_TOKEN manquant)." }, 503);
 
   // Vérifie que l'appelant est un collaborateur autorisé (via ses droits, pas ceux du serveur).
   const db = createClient(Deno.env.get("SUPABASE_URL")!, Deno.env.get("SUPABASE_ANON_KEY")!, {
@@ -74,6 +73,7 @@ Deno.serve(async (req) => {
   });
   const { data: member } = await db.rpc("is_member");
   if (!member) return json({ error: "Accès réservé aux collaborateurs autorisés." }, 403);
+  if (!TOKEN) return json({ error: "HubSpot n'est pas encore configuré (secret HUBSPOT_TOKEN manquant)." }, 503);
 
   let body: any;
   try { body = await req.json(); } catch { return json({ error: "Requête invalide" }, 400); }
