@@ -1,3 +1,3 @@
 # calendrier-matchs
 ## Carte Clients
-Application de carte de la base clients avec géolocalisation en temps réel : voir [`carte-clients/`](carte-clients/README.md).
+L'application de carte de la base clients a son propre dépôt : https://github.com/corrandantoine-wq/carte-clients (appli : https://corrandantoine-wq.github.io/carte-clients/).
