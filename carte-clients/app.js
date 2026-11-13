@@ -1038,7 +1038,8 @@
     for (const r of imp.data) {
       const c = rowToClient(r);
       if (!c.nom) { skipped++; continue; }
-      if (c.code_client) inFile.set(c.code_client, c); else noCode.push(c);
+      if (c.code_client) { if (!inFile.has(c.code_client)) inFile.set(c.code_client, c); } // doublon : on garde la 1re ligne
+      else noCode.push(c);
     }
     const updates = [], creates = [];
     for (const [code, c] of inFile) (byCode.has(code) ? updates : creates).push(c);

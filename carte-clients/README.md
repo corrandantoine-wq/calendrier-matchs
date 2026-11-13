@@ -89,6 +89,18 @@ Une extraction d'ERP convient (Sage, Cegid, EBP, SAP, Odoo, Divalto…), en gén
 
 Exemple : `exemple-clients.csv`. Limite du géocodage : 200 000 lignes par fichier.
 
+## Tests automatiques
+Ils sont lancés automatiquement sur GitHub à chaque modification (onglet **Actions**, workflow « Carte Clients – tests »).
+
+- **Interface** : 20 scénarios, rejoués sur mobile et sur ordinateur. Ils couvrent la connexion, l'accès refusé, l'import ERP (CSV et Excel), le ré-import sans doublon, les favoris, le rayon, la recherche, le trajet A → B, HubSpot et l'administration. La base de données et les services externes sont simulés.
+  ```bash
+  cd carte-clients && npm ci && npx playwright install chromium && npx playwright test
+  ```
+- **Base de données** : 23 vérifications des règles d'accès sur un vrai PostgreSQL (collaborateur, administrateur, personne non autorisée, accès sans connexion).
+  ```bash
+  PGHOST=localhost PGUSER=postgres bash tests/db/run.sh
+  ```
+
 ## Lancer en local
 ```bash
 cd carte-clients && python3 -m http.server 8000   # puis http://localhost:8000
