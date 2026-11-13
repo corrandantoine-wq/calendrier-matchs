@@ -62,11 +62,43 @@ select pg_temp.refused('code client en double', $$insert into public.clients (no
 select pg_temp.check('set_coords enregistre les positions',
   public.set_coords((select jsonb_agg(jsonb_build_object('id', id, 'lat', 48.85, 'lng', 2.35)) from public.clients)) = 2);
 
+-- Corbeille et historique
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000b', 'bob@soc.fr');
+select pg_temp.refused('bob met à la corbeille le client de l''admin', $$update public.clients set deleted_at = now() where code_client = 'A1'$$);
+update public.clients set deleted_at = now() where code_client = 'B1';
+select pg_temp.check('bob met son propre client à la corbeille (auteur noté)',
+  (select deleted_at is not null and deleted_by = '00000000-0000-0000-0000-00000000000b' from public.clients where code_client = 'B1'));
+delete from public.clients where code_client = 'B1';
+select pg_temp.check('bob ne peut pas supprimer définitivement', (select count(*) from public.clients where code_client = 'B1') = 1);
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a', 'admin@soc.fr');
+update public.clients set deleted_at = null where code_client = 'B1';
+select pg_temp.check('restauration depuis la corbeille', (select deleted_at is null and deleted_by is null from public.clients where code_client = 'B1'));
+select pg_temp.check('historique : création, modification, suppression et restauration journalisées',
+  (select array_agg(action order by id) from public.client_history where client_nom like 'Client de Bob%')
+    = array['création', 'modification', 'modification', 'suppression', 'restauration']);
+select pg_temp.check('historique : ancienne et nouvelle valeur, auteur',
+  (select changes -> 'nom' = '["Client de Bob", "Client de Bob SAS"]'::jsonb and user_email = 'bob@soc.fr'
+     from public.client_history where action = 'modification' and changes ? 'nom'));
+select pg_temp.check('historique : un simple changement de coordonnées n''est pas journalisé',
+  (select count(*) from public.client_history where action = 'modification' and changes = '{}') = 0);
+select pg_temp.refused('personne ne peut écrire dans l''historique', $$insert into public.client_history (client_id, client_nom, action) values (gen_random_uuid(), 'faux', 'création')$$);
+delete from public.client_history;
+reset role;
+select pg_temp.check('l''historique ne peut pas être effacé', (select count(*) from public.client_history) > 0);
+set role authenticated;
+select pg_temp.as_user('00000000-0000-0000-0000-00000000000a', 'admin@soc.fr');
+delete from public.clients where code_client = 'B1';
+select pg_temp.check('l''admin supprime définitivement (et c''est journalisé)',
+  (select count(*) from public.clients where code_client = 'B1') = 0
+  and exists (select 1 from public.client_history where action = 'suppression définitive'));
+insert into public.clients (nom, code_client) values ('Client de Bob SAS', 'B1'); -- remis pour la suite
+
 -- Personne non autorisée
 select pg_temp.as_user('00000000-0000-0000-0000-00000000000c', 'intrus@gmail.com');
 select pg_temp.check('l''intrus ne voit aucun client', (select count(*) from public.clients) = 0);
 select pg_temp.check('l''intrus ne voit aucun collaborateur', (select count(*) from public.members) = 0);
 select pg_temp.check('l''intrus ne voit aucun champ CRM', (select count(*) from public.crm_fields) = 0);
+select pg_temp.check('l''intrus ne voit pas l''historique', (select count(*) from public.client_history) = 0);
 select pg_temp.refused('l''intrus ajoute un client', $$insert into public.clients (nom) values ('spam')$$);
 select pg_temp.check('l''intrus ne peut pas déplacer les clients',
   public.set_coords((select jsonb_agg(jsonb_build_object('id', id, 'lat', 0, 'lng', 0)) from (select id from public.clients) s)) = 0);

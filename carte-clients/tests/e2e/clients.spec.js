@@ -67,7 +67,8 @@ test('un collaborateur ne peut supprimer que les clients qu’il a créés', asy
   await page.click('#backBtn');
   await page.click('#list li[data-id="c2"]');
   await page.click('[data-act=delete]');
-  await expect.poll(() => page.evaluate(() => window.__db.clients.map(c => c.id))).toEqual(['c1']);
+  await expect(page.locator('#list li[data-id]')).toHaveCount(1);
+  expect(await page.evaluate(() => window.__db.clients.find(c => c.id === 'c2').deleted_at)).toBeTruthy(); // à la corbeille, pas effacé
 });
 
 test('recherche par nom, ville ou code client', async ({ page }) => {
