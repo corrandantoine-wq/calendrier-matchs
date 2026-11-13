@@ -8,7 +8,7 @@ Web app (installable sur mobile) qui affiche la **base clients commune de l'équ
 - **Favoris personnels** : chacun marque ses clients d'une étoile et peut n'afficher que ses favoris.
 - **HubSpot** : chaque client peut être relié à sa fiche HubSpot. La fiche affiche alors des champs du CRM, choisis par l'administrateur, avec un lien « Ouvrir dans HubSpot ».
 - **Position en direct**, choix du rayon (1 à 100 km), liste triée par distance, itinéraire Google Maps ou Waze, appel, e-mail.
-- **Import et export CSV**, avec géocodage automatique des adresses.
+- **Import depuis un ERP** (CSV ou Excel) avec correspondance des colonnes, mise à jour par code client et géocodage par lot. Export CSV.
 - **Administration** (menu ☰) : gérer les collaborateurs, choisir les champs HubSpot affichés, vider la base.
 
 ## Architecture
@@ -16,7 +16,7 @@ Web app (installable sur mobile) qui affiche la **base clients commune de l'équ
 |---|---|
 | `index.html`, `app.js`, `style.css` | L'appli (statique, hébergée sur GitHub Pages) |
 | `config.js` | Adresse du projet Supabase et clé publique « anon » |
-| `supabase/migrations/001_init.sql` | Tables, règles de sécurité et temps réel |
+| `supabase/migrations/` | Tables, règles de sécurité, temps réel, import ERP |
 | `supabase/functions/hubspot/` | Passerelle sécurisée vers HubSpot (le jeton HubSpot reste sur le serveur) |
 
 La sécurité repose sur les règles **Row Level Security** de la base :
@@ -34,7 +34,7 @@ La sécurité repose sur les règles **Row Level Security** de la base :
 
 ### 2. Créer les tables
 1. Dans Supabase, ouvrez **SQL Editor → New query**.
-2. Collez tout le contenu de `supabase/migrations/001_init.sql`, puis cliquez sur **Run**.
+2. Collez le contenu de `supabase/migrations/001_init.sql` et cliquez sur **Run**. Recommencez avec `002_import_erp.sql`.
 3. Déclarez-vous administrateur. Dans une nouvelle requête, avec **votre** adresse :
    ```sql
    insert into public.members (email, role) values ('prenom.nom@societe.fr', 'admin');
@@ -74,11 +74,19 @@ La clé « anon » est faite pour être publique. Ne mettez **jamais** la clé *
 3. Menu ☰ → **Collaborateurs** : ajoutez l'adresse de chaque collègue. Chacun crée ensuite son compte avec cette adresse.
 4. Menu ☰ → **Champs HubSpot affichés** : cochez les informations du CRM à montrer sur les fiches.
 
-## Format CSV
-Voir `exemple-clients.csv`. Colonnes reconnues automatiquement :
-- nom, adresse, code postal, ville, téléphone, e-mail, notes ;
-- latitude, longitude ;
-- `hubspot_id` : pour relier directement chaque client à sa fiche HubSpot lors de l'import.
+## Importer la base clients (ERP, CSV, Excel)
+Menu ☰ → **Importer un fichier**. Formats acceptés :
+- **CSV**, séparé par `;` ou `,`. L'encodage UTF-8 ou Windows est détecté automatiquement.
+- **Excel** (`.xlsx`, `.xls`) : la première feuille est lue.
+
+Une extraction d'ERP convient (Sage, Cegid, EBP, SAP, Odoo, Divalto…), en général via « Exporter » sur la liste des clients.
+
+1. **Correspondance des colonnes** : l'appli reconnaît les noms habituels (« Raison sociale », « Intitulé », « N° compte tiers », « CP », « Adresse 2 »…). Ajustez si besoin, à l'aide de l'aperçu des 5 premières lignes. La correspondance est mémorisée pour le prochain import du même format.
+2. **Code client** : choisissez la colonne qui identifie le client dans l'ERP. Lors des imports suivants, les clients déjà présents sont **mis à jour** au lieu d'être dupliqués. Les notes, favoris et liens HubSpot saisis dans l'appli sont conservés.
+3. **Localisation** : les adresses françaises sont localisées **par lot**, quelques minutes pour des milliers de clients, via le service public de géocodage de l'IGN (`data.geopf.fr`). Les résultats peu fiables sont écartés. Les clients non localisés portent le badge « non localisé » et peuvent être corrigés à la main.
+4. **Corrections automatiques** : les zéros perdus par Excel sont rétablis (codes postaux `1000` → `01000`, téléphones `612345678` → `0612345678`).
+
+Exemple : `exemple-clients.csv`. Limite du géocodage : 200 000 lignes par fichier.
 
 ## Lancer en local
 ```bash

@@ -8,7 +8,7 @@
   const SETTINGS_KEY = 'carte-clients:settings';
   const MAX_LIST = 300;
   const RADII = [1, 2, 5, 10, 25, 50, 100, 0]; // 0 = tous
-  const COLS = 'id,nom,adresse,code_postal,ville,telephone,email,notes,lat,lng,hubspot_id,created_by';
+  const COLS = 'id,code_client,nom,adresse,code_postal,ville,telephone,email,notes,lat,lng,hubspot_id,created_by';
 
   // ---------- État ----------
   let clients = [];
@@ -107,7 +107,8 @@
     const { data, error } = await promise;
     if (error) {
       console.error(what, error);
-      toast(`${what} : ${error.message || 'erreur réseau'}`, 5000);
+      const msg = error.code === '23505' && /code_client/.test(error.message) ? 'ce code client est déjà utilisé par un autre client' : (error.message || 'erreur réseau');
+      toast(`${what} : ${msg}`, 5000);
       throw error;
     }
     return data;
@@ -287,7 +288,7 @@
   function matches(c) {
     if (settings.favOnly && !favorites.has(c.id)) return false;
     if (!query) return true;
-    const hay = `${c.nom} ${c.adresse} ${c.code_postal} ${c.ville} ${c.telephone} ${c.email} ${c.notes}`.toLowerCase();
+    const hay = `${c.code_client || ''} ${c.nom} ${c.adresse} ${c.code_postal} ${c.ville} ${c.telephone} ${c.email} ${c.notes}`.toLowerCase();
     return query.split(/\s+/).every(w => hay.includes(w));
   }
   const emptyState = (icon, title, text, btn = '') => `<li class="empty"><div class="em-icon">${icon}</div><strong>${title}</strong>${text}${btn}</li>`;
@@ -307,10 +308,11 @@
     const total = clients.length, s = n => (n > 1 ? 's' : '');
     const scope = settings.favOnly ? 'favori' : 'client';
     $('#title').textContent = query ? 'Résultats' : settings.favOnly ? 'Mes favoris' : (settings.radius && me) ? 'Autour de vous' : 'Tous les clients';
-    $('#subtitle').textContent = query ? `${rows.length} client${s(rows.length)} trouvé${s(rows.length)}`
-      : !me ? `${settings.favOnly ? favorites.size : total} ${scope}${s(settings.favOnly ? favorites.size : total)} · ${watchId == null ? 'position indisponible' : 'recherche de votre position…'}`
-      : settings.radius ? `${nearCount} ${scope}${s(nearCount)} à moins de ${settings.radius} km · ${settings.favOnly ? favorites.size : total} au total`
-      : `${rows.length} ${scope}${s(rows.length)} · triés par distance`;
+    const fr = v => v.toLocaleString('fr-FR');
+    $('#subtitle').textContent = query ? `${fr(rows.length)} client${s(rows.length)} trouvé${s(rows.length)}`
+      : !me ? `${fr(settings.favOnly ? favorites.size : total)} ${scope}${s(settings.favOnly ? favorites.size : total)} · ${watchId == null ? 'position indisponible' : 'recherche de votre position…'}`
+      : settings.radius ? `${fr(nearCount)} ${scope}${s(nearCount)} à moins de ${settings.radius} km · ${fr(settings.favOnly ? favorites.size : total)} au total`
+      : `${fr(rows.length)} ${scope}${s(rows.length)} · triés par distance`;
 
     const list = $('#list');
     if (!rows.length) {
@@ -381,6 +383,7 @@
         ${row(I.phone, 'Téléphone', c.telephone, c.telephone ? telUrl(c) : null)}
         ${row(I.mail, 'E-mail', c.email, c.email ? `mailto:${c.email}` : null)}
         ${row(I.note, 'Notes', c.notes)}
+        ${row(I.users, 'Code client', c.code_client)}
       </div>
       <div id="crm" class="crm">${crmHtml(c)}</div>
       <div class="d-foot">
@@ -642,19 +645,26 @@
   }
 
   const toRow = c => ({
+    code_client: String(c.code_client ?? '').trim() || null,
     nom: c.nom, adresse: c.adresse || '', code_postal: c.code_postal || '', ville: c.ville || '',
     telephone: c.telephone || '', email: c.email || '', notes: c.notes || '',
     lat: num(c.lat), lng: num(c.lng),
   });
 
   // ---------- Géocodage ----------
-  async function geocode(address) {
+  // Service public de géocodage (IGN / Base Adresse Nationale) : https://data.geopf.fr/geocodage
+  const GEO = 'https://data.geopf.fr/geocodage';
+  const MIN_SCORE = 0.5;
+  // Le résultat est-il cohérent avec le code postal fourni (même département) ?
+  const sameDept = (cp, found) => !cp || !found || String(cp).slice(0, 2) === String(found).slice(0, 2);
+
+  async function geocode(address, cp = '') {
     if (!address) return null;
-    try { // Base Adresse Nationale (France) — rapide, sans clé
-      const r = await fetch(`https://api-adresse.data.gouv.fr/search/?q=${encodeURIComponent(address)}&limit=1`);
+    try {
+      const r = await fetch(`${GEO}/search?q=${encodeURIComponent(address)}&limit=1`);
       if (r.ok) {
         const f = (await r.json()).features?.[0];
-        if (f && f.properties.score > 0.4) return { lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0] };
+        if (f && f.properties.score >= MIN_SCORE && sameDept(cp, f.properties.postcode)) return { lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0] };
       }
     } catch {}
     try { // Repli international : Nominatim (OpenStreetMap), 1 requête/seconde max
@@ -665,82 +675,302 @@
     return null;
   }
 
-  let geocoding = false;
-  async function geocodeMissing(list = clients) {
-    if (geocoding) return;
-    const todo = list.filter(c => !hasPos(c) && fullAddress(c));
-    if (!todo.length) { if (list === clients) toast('Tous les clients avec une adresse sont déjà localisés.'); return; }
-    geocoding = true;
-    let ok = 0;
-    try {
-      for (let i = 0; i < todo.length; i++) {
-        toast(`Localisation des adresses… ${i + 1}/${todo.length}`, 60000);
-        const p = await geocode(fullAddress(todo[i]));
-        if (p) { try { await updateClient(todo[i].id, p); ok++; } catch {} }
-        if (i % 10 === 9) scheduleFullRender();
-        await sleep(120);
+  // Géocodage par lot : jusqu'à 5 000 adresses par envoi (le service accepte 200 000 lignes / 50 Mo).
+  async function geocodeBatch(list, onProgress = () => {}, mainLineOnly = false) {
+    const found = new Map();
+    const CHUNK = 5000;
+    for (let i = 0; i < list.length; i += CHUNK) {
+      const part = list.slice(i, i + CHUNK);
+      const line = a => (mainLineOnly ? String(a || '').split(',')[0] : a || '');
+      const csv = Papa.unparse(part.map(c => ({ id: c.id, adresse: line(c.adresse), code_postal: c.code_postal || '', ville: c.ville || '' })));
+      const fd = new FormData();
+      fd.append('data', new Blob([csv], { type: 'text/csv' }), 'adresses.csv');
+      for (const col of ['adresse', 'code_postal', 'ville']) fd.append('columns', col);
+      fd.append('postcode', 'code_postal');
+      let text = '';
+      for (let attempt = 0; attempt < 3 && !text; attempt++) {
+        try { const r = await fetch(`${GEO}/search/csv`, { method: 'POST', body: fd }); if (r.ok) text = await r.text(); else await sleep(1500); }
+        catch { await sleep(1500); }
       }
-    } finally { geocoding = false; }
-    scheduleFullRender();
-    toast(`${ok}/${todo.length} adresses localisées${ok < todo.length ? '. Complétez les autres à la main.' : '.'}`, 5000);
+      if (text) {
+        for (const r of Papa.parse(text, { header: true, skipEmptyLines: true }).data) {
+          const lat = num(r.latitude), lng = num(r.longitude), score = num(r.result_score);
+          if (lat != null && lng != null && score >= MIN_SCORE && sameDept(r.code_postal, r.result_postcode)) found.set(r.id, { lat, lng });
+        }
+      }
+      onProgress(Math.min(i + CHUNK, list.length), list.length);
+    }
+    return found;
   }
 
-  // ---------- Import / export CSV ----------
-  const ALIASES = {
-    nom: ['nom', 'name', 'client', 'raison sociale', 'raison_sociale', 'societe', 'société', 'entreprise', 'company', 'enseigne'],
-    adresse: ['adresse', 'address', 'rue', 'street', 'adresse1', 'adresse 1'],
-    code_postal: ['code_postal', 'code postal', 'cp', 'zip', 'postcode', 'postal_code', 'codepostal'],
-    ville: ['ville', 'city', 'commune', 'localite', 'localité'],
-    telephone: ['telephone', 'téléphone', 'tel', 'tél', 'phone', 'mobile', 'portable'],
-    email: ['email', 'e-mail', 'mail', 'courriel'],
-    notes: ['notes', 'note', 'commentaire', 'commentaires', 'remarques', 'comment'],
-    lat: ['latitude', 'lat', 'y'],
-    lng: ['longitude', 'lng', 'lon', 'long', 'x'],
-    prenom: ['prenom', 'prénom', 'firstname', 'first name'],
-    hubspot_id: ['hubspot_id', 'hubspot id', 'record id', 'id hubspot', 'company id'],
-  };
-  const norm = s => String(s).trim().toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '');
-  function mapHeaders(fields) {
-    const out = {};
-    for (const [key, names] of Object.entries(ALIASES)) {
-      const n = names.map(norm);
-      const f = fields.find(h => n.includes(norm(h)));
-      if (f) out[key] = f;
+  // Enregistre les coordonnées en base par paquets de 1 000.
+  async function saveCoords(found) {
+    const items = [...found].map(([id, p]) => ({ id, lat: p.lat, lng: p.lng }));
+    for (let i = 0; i < items.length; i += 1000) {
+      await q(sb.rpc('set_coords', { items: items.slice(i, i + 1000) }), 'Enregistrement des positions');
+    }
+    for (const { id, lat, lng } of items) { const c = byId(id); if (c) Object.assign(c, { lat, lng }); }
+    saveCache();
+  }
+
+  // Localise les clients sans coordonnées : par lot d'abord, puis un par un (étranger…) pour un petit reste.
+  let geocoding = false;
+  async function geocodeMissing(list = clients, onProgress) {
+    if (geocoding) return { ok: 0, total: 0 };
+    const todo = list.filter(c => !hasPos(c) && fullAddress(c));
+    if (!todo.length) { if (list === clients && !onProgress) toast('Tous les clients avec une adresse sont déjà localisés.'); return { ok: 0, total: 0 }; }
+    geocoding = true;
+    const report = onProgress || ((d, t) => toast(`Localisation des adresses… ${d}/${t}`, 60000));
+    try {
+      const found = await geocodeBatch(todo, (d) => report(Math.round(d * 0.8), todo.length));
+      // 2e passe sans le complément d'adresse (« Bâtiment B », « ZI »…), qui gêne souvent le géocodeur.
+      let rest = todo.filter(c => !found.has(c.id));
+      if (rest.length) for (const [id, pos] of await geocodeBatch(rest, () => report(Math.round(todo.length * 0.9), todo.length), true)) found.set(id, pos);
+      rest = todo.filter(c => !found.has(c.id));
+      if (rest.length && rest.length <= 30) {
+        for (const c of rest) { const p = await geocode(fullAddress({ ...c, adresse: String(c.adresse || '').split(',')[0] }), c.code_postal); if (p) found.set(c.id, p); }
+      }
+      await saveCoords(found);
+      report(todo.length, todo.length);
+      scheduleFullRender();
+      if (!onProgress) toast(`${found.size}/${todo.length} adresses localisées${found.size < todo.length ? '. Complétez les autres à la main.' : '.'}`, 5000);
+      return { ok: found.size, total: todo.length };
+    } catch { return { ok: 0, total: todo.length }; }
+    finally { geocoding = false; }
+  }
+
+  // ---------- Import (ERP, CSV, Excel) ----------
+  // Champs de l'appli et noms de colonnes habituels (ERP français et internationaux).
+  const FIELDS = [
+    { key: 'nom', label: 'Nom / raison sociale', req: true, alias: ['nom', 'name', 'raison sociale', 'raison_sociale', 'nom client', 'nom du client', 'client', 'societe', 'société', 'entreprise', 'company', 'company name', 'enseigne', 'intitule', 'intitulé', 'intitule tiers', 'libelle', 'libellé', 'libelle tiers', 'denomination', 'dénomination', 'name 1', 'name1', 'customer name', 'nom raison sociale', 'designation', 'désignation'] },
+    { key: 'code_client', label: 'Code client', key2: true, alias: ['code client', 'code_client', 'n client', 'no client', 'numero client', 'num client', 'numéro client', 'ref client', 'reference client', 'référence client', 'code tiers', 'n compte tiers', 'compte tiers', 'numero de compte', 'n compte', 'compte', 'code', 'id client', 'client id', 'customer', 'customer number', 'customer id', 'internal reference', 'reference', 'référence', 'ref', 'numero', 'numéro', 'matricule', 'identifiant'] },
+    { key: 'adresse', label: 'Adresse', alias: ['adresse', 'adresse 1', 'adresse1', 'adresse ligne 1', 'adresse postale', 'adresse de facturation', 'adresse facturation', 'address', 'address 1', 'address line 1', 'street', 'rue', 'voie', 'billing street'] },
+    { key: 'adresse2', label: 'Complément d’adresse', alias: ['adresse 2', 'adresse2', 'adresse ligne 2', 'complement', 'complément', 'complement adresse', 'complément d adresse', 'complement d adresse', 'street2', 'address 2', 'address line 2'] },
+    { key: 'code_postal', label: 'Code postal', alias: ['code postal', 'code_postal', 'codepostal', 'cp', 'zip', 'zip code', 'postcode', 'postal code', 'postal_code', 'code postal facturation'] },
+    { key: 'ville', label: 'Ville', alias: ['ville', 'city', 'commune', 'localite', 'localité', 'ville facturation', 'bureau distributeur'] },
+    { key: 'telephone', label: 'Téléphone', alias: ['telephone', 'téléphone', 'tel', 'tél', 'telephone 1', 'tel 1', 'téléphone fixe', 'telephone fixe', 'phone', 'phone number', 'mobile', 'portable', 'gsm', 'standard'] },
+    { key: 'email', label: 'E-mail', alias: ['email', 'e mail', 'mail', 'courriel', 'adresse e mail', 'adresse mail', 'email address'] },
+    { key: 'notes', label: 'Notes', alias: ['notes', 'note', 'commentaire', 'commentaires', 'remarques', 'remarque', 'comment', 'observations', 'observation'] },
+    { key: 'lat', label: 'Latitude', alias: ['latitude', 'lat', 'y', 'gps latitude'] },
+    { key: 'lng', label: 'Longitude', alias: ['longitude', 'lng', 'lon', 'long', 'x', 'gps longitude'] },
+    { key: 'hubspot_id', label: 'ID HubSpot', alias: ['hubspot id', 'hubspot_id', 'id hubspot', 'record id', 'company id', 'id de fiche d informations'] },
+    { key: 'prenom', label: 'Prénom (si clients particuliers)', alias: ['prenom', 'prénom', 'firstname', 'first name'] },
+  ];
+  // Normalise un nom de colonne : minuscules, sans accents ni ponctuation.
+  const norm = s => String(s ?? '').toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
+  const MAPPING_KEY = 'carte-clients:mapping';
+
+  function guessMapping(headers) {
+    const saved = load(MAPPING_KEY, {})[headers.map(norm).join('|')];
+    if (saved) return saved;
+    const used = new Set(), out = {};
+    // Les correspondances exactes d'abord, champ par champ, dans l'ordre de la liste d'alias.
+    for (const f of FIELDS) {
+      for (const a of f.alias.map(norm)) {
+        const i = headers.findIndex((h, j) => !used.has(j) && norm(h) === a);
+        if (i >= 0) { out[f.key] = i; used.add(i); break; }
+      }
     }
     return out;
   }
 
-  function importCsv(file) {
-    Papa.parse(file, {
-      header: true, skipEmptyLines: true,
-      complete: async ({ data, meta }) => {
-        const h = mapHeaders(meta.fields || []);
-        if (!h.nom && !h.adresse) { toast('Colonnes non reconnues : il faut au moins « nom » ou « adresse ».', 6000); return; }
-        const rows = data.map(row => {
-          const get = k => (h[k] ? String(row[h[k]] ?? '').trim() : '');
-          const nom = [get('prenom'), get('nom')].filter(Boolean).join(' ') || get('adresse');
-          const r = toRow({ nom, adresse: get('adresse'), code_postal: get('code_postal'), ville: get('ville'),
-            telephone: get('telephone'), email: get('email'), notes: get('notes'), lat: get('lat'), lng: get('lng') });
-          if (/^\d+$/.test(get('hubspot_id'))) r.hubspot_id = get('hubspot_id');
-          return r;
-        }).filter(c => c.nom);
-        if (!rows.length) return toast('Aucune ligne exploitable dans ce fichier.');
-        if (!confirm(`Ajouter ${rows.length} client(s) à la base commune ?\nIls seront visibles par tous les collaborateurs.`)) return;
-        toast(`Envoi de ${rows.length} clients…`, 60000);
-        try {
-          const added = await insertClients(rows);
-          scheduleFullRender(); if (!me) setTimeout(fitAll, 300);
-          const missing = added.filter(c => !hasPos(c)).length;
-          toast(`${added.length} clients importés${missing ? `, ${missing} à localiser…` : '.'}`, 4000);
-          if (missing) geocodeMissing(added);
-        } catch {}
-      },
-      error: e => toast('Erreur de lecture du CSV : ' + e.message, 6000),
-    });
+  // Lit le fichier : Excel (.xlsx/.xls) ou texte (CSV) en UTF-8 ou en encodage Windows.
+  async function readTable(file) {
+    if (/\.xlsx?$/i.test(file.name)) {
+      if (!window.XLSX) await new Promise((ok, ko) => {
+        const s = Object.assign(document.createElement('script'), { src: 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js', onload: ok, onerror: ko });
+        document.head.appendChild(s);
+      });
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      return { rows: XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false, defval: '', blankrows: false }), encoding: `Excel, feuille « ${wb.SheetNames[0]} »` };
+    }
+    const buf = await file.arrayBuffer();
+    let text, encoding = 'UTF-8';
+    try { text = new TextDecoder('utf-8', { fatal: true }).decode(buf); }
+    catch { text = new TextDecoder('windows-1252').decode(buf); encoding = 'Windows (accents convertis)'; }
+    return { rows: Papa.parse(text, { skipEmptyLines: 'greedy' }).data, encoding };
   }
 
+  // Corrige les pertes habituelles d'Excel : zéros de tête des codes postaux et des téléphones.
+  function fixCp(v) { v = String(v ?? '').trim(); return /^\d{4}$/.test(v) ? '0' + v : v; }
+  function fixTel(v) { v = String(v ?? '').trim(); return /^[1-9]\d{8}$/.test(v) ? '0' + v : v; }
+
+  const imp = { headers: [], data: [], mapping: {}, file: '' };
+  // « 1 client ajouté », « 2 clients ajoutés »
+  const pl = (v, one, many) => `${v.toLocaleString('fr-FR')} ${v > 1 ? many : one}`;
+  const impDlg = $('#importDialog');
+
+  async function openImport(file) {
+    let table;
+    try { table = await readTable(file); } catch (e) { return toast('Impossible de lire ce fichier : ' + (e.message || e), 6000); }
+    const rows = (table.rows || []).filter(r => r.some(v => String(v ?? '').trim()));
+    if (rows.length < 2) return toast('Le fichier ne contient pas de lignes de clients.', 5000);
+    const seen = {};
+    imp.headers = rows[0].map((h, i) => { h = String(h ?? '').trim() || `Colonne ${i + 1}`; seen[h] = (seen[h] || 0) + 1; return seen[h] > 1 ? `${h} (${seen[h]})` : h; });
+    imp.data = rows.slice(1);
+    imp.mapping = guessMapping(imp.headers);
+    imp.file = file.name;
+    $('#impFileInfo').textContent = `${file.name} · ${imp.data.length.toLocaleString('fr-FR')} lignes · ${imp.headers.length} colonnes · ${table.encoding}`;
+    $('#impMap').hidden = false; $('#impRun').hidden = true;
+    $('#impGo').hidden = false; $('#impGo').disabled = false; $('#impGo').textContent = 'Importer';
+    $('#impCancel').textContent = 'Annuler';
+    renderMapping();
+    impDlg.showModal();
+  }
+
+  function renderMapping() {
+    const opts = ['<option value="">— Ignorer —</option>', ...imp.headers.map((h, i) => `<option value="${i}">${esc(h)}</option>`)].join('');
+    $('#impFields').innerHTML = FIELDS.map(f => `
+      <label class="${f.req ? 'req' : ''}${f.key2 ? ' key' : ''}"><span>${esc(f.label)}</span>
+        <select data-field="${f.key}" class="${imp.mapping[f.key] != null ? 'set' : ''}">${opts}</select>
+      </label>`).join('');
+    for (const sel of $('#impFields').querySelectorAll('select')) sel.value = imp.mapping[sel.dataset.field] ?? '';
+    renderPreview();
+  }
+  $('#impFields').addEventListener('change', e => {
+    const sel = e.target.closest('select'); if (!sel) return;
+    if (sel.value === '') delete imp.mapping[sel.dataset.field]; else imp.mapping[sel.dataset.field] = +sel.value;
+    sel.classList.toggle('set', sel.value !== '');
+    renderPreview();
+  });
+
+  // Transforme une ligne du fichier en client, avec uniquement les champs choisis.
+  function rowToClient(r) {
+    const m = imp.mapping, get = k => (m[k] != null ? String(r[m[k]] ?? '').trim() : '');
+    const c = {};
+    const nom = [get('prenom'), get('nom')].filter(Boolean).join(' ');
+    c.nom = nom || get('adresse');
+    if (m.code_client != null) c.code_client = get('code_client') || null;
+    if (m.adresse != null || m.adresse2 != null) c.adresse = [get('adresse'), get('adresse2')].filter(Boolean).join(', ');
+    if (m.code_postal != null) c.code_postal = fixCp(get('code_postal'));
+    if (m.ville != null) c.ville = get('ville');
+    if (m.telephone != null) c.telephone = fixTel(get('telephone'));
+    if (m.email != null) c.email = get('email');
+    if (m.notes != null) c.notes = get('notes');
+    if (m.lat != null && m.lng != null) { c.lat = num(get('lat')); c.lng = num(get('lng')); }
+    if (m.hubspot_id != null) c.hubspot_id = /^\d+$/.test(get('hubspot_id')) ? get('hubspot_id') : null;
+    return c;
+  }
+
+  // Prépare l'import : dédoublonne par code client et sépare nouveaux / mis à jour / sans code.
+  function planImport() {
+    const byCode = new Map(clients.filter(c => c.code_client).map(c => [c.code_client, c]));
+    const inFile = new Map(), noCode = [];
+    let skipped = 0;
+    for (const r of imp.data) {
+      const c = rowToClient(r);
+      if (!c.nom) { skipped++; continue; }
+      if (c.code_client) inFile.set(c.code_client, c); else noCode.push(c);
+    }
+    const updates = [], creates = [];
+    for (const [code, c] of inFile) (byCode.has(code) ? updates : creates).push(c);
+    return { byCode, updates, creates, noCode, skipped, dupInFile: imp.data.length - skipped - noCode.length - inFile.size };
+  }
+
+  function renderPreview() {
+    const shown = FIELDS.filter(f => imp.mapping[f.key] != null);
+    $('#impPreview').innerHTML = !shown.length ? '<tr><td>Aucune colonne choisie.</td></tr>' :
+      `<thead><tr>${shown.map(f => `<th>${esc(f.label)}</th>`).join('')}</tr></thead><tbody>` +
+      imp.data.slice(0, 5).map(r => `<tr>${shown.map(f => `<td>${esc(String(r[imp.mapping[f.key]] ?? ''))}</td>`).join('')}</tr>`).join('') + '</tbody>';
+    const sum = $('#impSummary'), n = v => v.toLocaleString('fr-FR');
+    if (imp.mapping.nom == null && imp.mapping.adresse == null) {
+      sum.className = 'imp-summary warn'; sum.textContent = 'Choisissez au moins la colonne « Nom / raison sociale ».';
+      $('#impGo').disabled = true; return;
+    }
+    $('#impGo').disabled = false;
+    const p = planImport(), parts = [];
+    if (p.creates.length + p.noCode.length) parts.push(`<b>${pl(p.creates.length + p.noCode.length, 'nouveau client', 'nouveaux clients')}</b>`);
+    if (p.updates.length) parts.push(`<b>${pl(p.updates.length, 'client déjà présent mis à jour', 'clients déjà présents mis à jour')}</b> (même code client)`);
+    if (p.dupInFile > 0) parts.push(pl(p.dupInFile, 'ligne en double dans le fichier ignorée', 'lignes en double dans le fichier ignorées'));
+    if (p.skipped) parts.push(pl(p.skipped, 'ligne sans nom ignorée', 'lignes sans nom ignorées'));
+    let warn = '';
+    if (imp.mapping.code_client == null) warn = '<br>⚠️ Sans colonne « Code client », un nouvel import du même fichier créera des doublons.';
+    sum.className = 'imp-summary' + (warn ? ' warn' : '');
+    sum.innerHTML = parts.join(' · ') + warn;
+  }
+
+  function impStep(i, state, text) {
+    const li = $('#impSteps').children[i];
+    li.className = state; if (text) li.textContent = text;
+  }
+  const impBar = pct => { $('#impBar').style.width = Math.round(pct) + '%'; };
+
+  $('#impGo').addEventListener('click', async () => {
+    const p = planImport(), total = p.updates.length + p.creates.length + p.noCode.length;
+    if (!total) return toast('Aucune ligne à importer.');
+    // Mémorise la correspondance des colonnes pour le prochain import du même format.
+    const maps = load(MAPPING_KEY, {}); maps[imp.headers.map(norm).join('|')] = imp.mapping; store(MAPPING_KEY, maps);
+
+    $('#impMap').hidden = true; $('#impRun').hidden = false; $('#impGo').hidden = true; $('#impCancel').textContent = 'Fermer';
+    $('#impResult').textContent = '';
+    $('#impSteps').innerHTML = '<li>Enregistrement des clients</li><li>Localisation des adresses</li><li>Terminé</li>';
+    impBar(0);
+    impDlg.dataset.busy = '1';
+    const n = v => v.toLocaleString('fr-FR');
+    try {
+      // 1. Envoi : mise à jour par code client, sinon ajout.
+      impStep(0, 'on');
+      const prep = c => {
+        const old = p.byCode.get(c.code_client);
+        if (!('lat' in c)) { // pas de coordonnées dans le fichier : on garde celles connues si l'adresse n'a pas changé
+          const same = old && ['adresse', 'code_postal', 'ville'].every(k => !(k in c) || (c[k] || '') === (old[k] || ''));
+          c.lat = same ? old.lat : null; c.lng = same ? old.lng : null;
+        }
+        if ('hubspot_id' in c && !c.hubspot_id && old?.hubspot_id) c.hubspot_id = old.hubspot_id; // ne pas perdre un lien existant
+        return c;
+      };
+      // Clients déjà connus : les notes saisies dans l'appli ne sont jamais remplacées par celles de l'ERP.
+      const updates = p.updates.map(c => { c = prep(c); delete c.notes; return c; });
+      const creates = p.creates.map(prep);
+      const plain = p.noCode.map(c => ({ ...c, code_client: null }));
+      const saved = [];
+      const BATCH = 500;
+      let done = 0;
+      for (const group of [updates, creates]) { // chaque envoi doit avoir les mêmes colonnes
+        for (let i = 0; i < group.length; i += BATCH) {
+          const res = await q(sb.from('clients').upsert(group.slice(i, i + BATCH), { onConflict: 'code_client' }).select(COLS), 'Import');
+          saved.push(...res.map(clean)); done += res.length;
+          impStep(0, 'on', `Enregistrement des clients… ${n(done)}/${n(total)}`); impBar(done / total * 50);
+        }
+      }
+      for (let i = 0; i < plain.length; i += BATCH) {
+        const res = await q(sb.from('clients').insert(plain.slice(i, i + BATCH)).select(COLS), 'Import');
+        saved.push(...res.map(clean)); done += res.length;
+        impStep(0, 'on', `Enregistrement des clients… ${n(done)}/${n(total)}`); impBar(done / total * 50);
+      }
+      for (const c of saved) { const i = clients.findIndex(x => x.id === c.id); i >= 0 ? (clients[i] = c) : clients.push(c); }
+      saveCache(); scheduleFullRender();
+      impStep(0, 'done', pl(saved.length, 'client enregistré', 'clients enregistrés'));
+
+      // 2. Localisation par lot des adresses sans coordonnées.
+      const toLocate = saved.filter(c => !hasPos(c) && fullAddress(c));
+      let geo = { ok: 0, total: 0 };
+      if (toLocate.length) {
+        impStep(1, 'on', `Localisation de ${n(toLocate.length)} adresses…`);
+        geo = await geocodeMissing(toLocate, (d, t) => { impStep(1, 'on', `Localisation des adresses… ${n(d)}/${n(t)}`); impBar(50 + d / t * 50); });
+        impStep(1, 'done', `${n(geo.ok)}/${pl(geo.total, 'adresse localisée', 'adresses localisées')}`);
+      } else impStep(1, 'done', 'Toutes les adresses étaient déjà localisées');
+      impBar(100);
+      impStep(2, 'done', 'Import terminé');
+      const created = p.creates.length + p.noCode.length;
+      const miss = geo.total - geo.ok;
+      $('#impResult').innerHTML = `<b>${pl(created, 'client ajouté', 'clients ajoutés')}</b> · <b>${pl(p.updates.length, 'mis à jour', 'mis à jour')}</b>` +
+        (miss > 0 ? `<br>${miss > 1 ? `${n(miss)} adresses n’ont pas pu être localisées` : 'Une adresse n’a pas pu être localisée'} : retrouvez ${miss > 1 ? 'ces clients' : 'ce client'} dans la liste avec le badge « non localisé » pour corriger.` : '');
+      $('#impResult').className = 'imp-summary' + (geo.total > geo.ok ? ' warn' : '');
+      setTimeout(() => { if (!me) fitAll(); }, 400);
+    } catch {
+      const cur = [...$('#impSteps').children].findIndex(li => li.className === 'on');
+      if (cur >= 0) impStep(cur, 'err');
+      $('#impResult').className = 'imp-summary warn';
+      $('#impResult').textContent = 'L’import a été interrompu. Les clients déjà envoyés sont enregistrés : relancez le même fichier pour terminer (les clients ayant un code ne seront pas dupliqués).';
+    } finally { delete impDlg.dataset.busy; }
+  });
+  impDlg.addEventListener('cancel', e => { if (impDlg.dataset.busy) e.preventDefault(); });
+  impDlg.addEventListener('click', e => { if (impDlg.dataset.busy && (e.target === impDlg || e.target.closest('[data-close]'))) e.stopImmediatePropagation(); }, true);
+
   function exportCsv() {
-    const rows = clients.map(c => ({ nom: c.nom, adresse: c.adresse, code_postal: c.code_postal, ville: c.ville,
+    const rows = clients.map(c => ({ code_client: c.code_client ?? '', nom: c.nom, adresse: c.adresse, code_postal: c.code_postal, ville: c.ville,
       telephone: c.telephone, email: c.email, notes: c.notes, latitude: c.lat ?? '', longitude: c.lng ?? '',
       hubspot_id: c.hubspot_id ?? '', favori: favorites.has(c.id) ? 'oui' : '' }));
     const csv = Papa.unparse(rows, { delimiter: ';' });
@@ -750,7 +980,7 @@
   }
 
   async function loadSample() {
-    try { const r = await fetch('exemple-clients.csv'); importCsv(new File([await r.blob()], 'exemple.csv')); }
+    try { const r = await fetch('exemple-clients.csv'); openImport(new File([await r.blob()], 'exemple-clients.csv')); }
     catch { toast('Impossible de charger le fichier d’exemple.'); }
   }
 
@@ -766,7 +996,7 @@
     form.reset();
     $('#dialogTitle').textContent = c ? 'Modifier le client' : 'Nouveau client';
     const v = c || {};
-    for (const k of ['id', 'nom', 'adresse', 'code_postal', 'ville', 'telephone', 'email', 'notes']) form.elements[k].value = v[k] ?? '';
+    for (const k of ['id', 'code_client', 'nom', 'adresse', 'code_postal', 'ville', 'telephone', 'email', 'notes']) form.elements[k].value = v[k] ?? '';
     const ll = latlng || (hasPos(v) ? v : null);
     form.elements.latitude.value = ll ? (+ll.lat).toFixed(6) : '';
     form.elements.longitude.value = ll ? (+ll.lng).toFixed(6) : '';
@@ -783,7 +1013,7 @@
   dlg.addEventListener('close', async () => {
     if (dlg.returnValue !== 'save') return;
     const f = form.elements;
-    const data = toRow({ nom: f.nom.value.trim(), adresse: f.adresse.value.trim(), code_postal: f.code_postal.value.trim(),
+    const data = toRow({ code_client: f.code_client.value, nom: f.nom.value.trim(), adresse: f.adresse.value.trim(), code_postal: f.code_postal.value.trim(),
       ville: f.ville.value.trim(), telephone: f.telephone.value.trim(), email: f.email.value.trim(), notes: f.notes.value.trim(),
       lat: f.latitude.value, lng: f.longitude.value });
     if (!data.nom) return;
@@ -792,7 +1022,7 @@
     if (old && fullAddress(old) !== fullAddress(data) && old.lat === data.lat && old.lng === data.lng) { data.lat = data.lng = null; }
     if (!hasPos(data) && fullAddress(data)) {
       toast('Localisation de l’adresse…');
-      const p = await geocode(fullAddress(data));
+      const p = await geocode(fullAddress(data), data.code_postal);
       if (p) Object.assign(data, p); else toast('Adresse introuvable : saisissez les coordonnées GPS.', 5000);
     }
     try {
@@ -910,7 +1140,7 @@
   $('#menuBtn').addEventListener('click', toggleMenu);
   $('#userBtn').addEventListener('click', toggleMenu);
   document.addEventListener('click', e => { if (!menu.hidden && !menu.contains(e.target)) menu.hidden = true; });
-  $('#csvInput').addEventListener('change', e => { const f = e.target.files[0]; if (f) importCsv(f); e.target.value = ''; menu.hidden = true; });
+  $('#csvInput').addEventListener('change', e => { const f = e.target.files[0]; if (f) openImport(f); e.target.value = ''; menu.hidden = true; });
   menu.addEventListener('click', async e => {
     const action = e.target.closest('button')?.dataset.action; if (!action) return;
     menu.hidden = true;

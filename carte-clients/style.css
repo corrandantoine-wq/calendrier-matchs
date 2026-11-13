@@ -351,3 +351,37 @@ dialog[open] { animation: up .25s cubic-bezier(.2,.8,.2,1); }
 .checks li { cursor: pointer; }
 .checks input { width: 20px; height: 20px; accent-color: var(--accent); flex: none; }
 .role-badge { font-size: 11px; font-weight: 700; color: var(--accent); background: var(--accent-soft); border-radius: 6px; padding: 2px 6px; margin-left: 6px; }
+
+/* ===== Import (ERP, CSV, Excel) ===== */
+.panel-dlg.wide { width: min(720px, 100vw); }
+.imp-section { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; color: var(--ink-3); margin-top: 6px; }
+.imp-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 14px; }
+.imp-fields label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; font-weight: 500; color: var(--ink-2); }
+.imp-fields label.req span::after { content: ' *'; color: var(--danger); }
+.imp-fields label.key span::after { content: ' (évite les doublons)'; color: var(--accent); font-weight: 600; }
+.imp-fields select { height: 42px; border-radius: 10px; border: 1.5px solid transparent; background: var(--surface-2); color: var(--ink); font: inherit; font-size: 15px; padding: 0 8px; }
+.imp-fields select.set { border-color: var(--accent-soft); background: var(--accent-soft); }
+.imp-preview { overflow: auto; max-height: 190px; border: 1px solid var(--line); border-radius: 12px; }
+.imp-preview table { border-collapse: collapse; font-size: 12.5px; min-width: 100%; }
+.imp-preview th, .imp-preview td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; max-width: 220px; overflow: hidden; text-overflow: ellipsis; }
+.imp-preview th { position: sticky; top: 0; background: var(--surface-2); font-weight: 600; color: var(--ink-2); }
+.imp-summary { margin: 4px 0 0; padding: 12px 14px; border-radius: 12px; background: var(--accent-soft); color: var(--ink); font-size: 14px; line-height: 1.5; }
+.imp-summary:empty { display: none; }
+.imp-summary.warn { background: #fff4db; color: #7a4a00; }
+@media (prefers-color-scheme: dark) { .imp-summary.warn { background: #3b2a08; color: #fcd57a; } }
+.imp-steps { margin: 4px 0 0; padding-left: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; }
+.imp-steps li { display: flex; align-items: center; gap: 10px; color: var(--ink-3); }
+.imp-steps li::before { content: ''; width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--line); flex: none; }
+.imp-steps li.on { color: var(--ink); font-weight: 600; }
+.imp-steps li.on::before { border-color: var(--accent); border-top-color: transparent; animation: spin .8s linear infinite; }
+.imp-steps li.done { color: var(--ink-2); }
+.imp-steps li.done::before { background: var(--ok); border-color: var(--ok); box-shadow: inset 0 0 0 3px var(--surface); }
+.imp-steps li.err::before { background: var(--danger); border-color: var(--danger); }
+.imp-bar { height: 8px; border-radius: 4px; background: var(--surface-2); overflow: hidden; }
+.imp-bar span { display: block; height: 100%; width: 0; background: var(--accent); transition: width .25s; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 599px) { .imp-fields { grid-template-columns: 1fr; } }
+/* Les dialogues longs défilent ; les boutons restent visibles en bas. */
+.panel-dlg .dlg-body { overflow-y: auto; overscroll-behavior: contain; padding-bottom: 0; }
+.panel-dlg .dialog-actions { position: sticky; bottom: 0; background: var(--surface); padding: 12px 0 calc(16px + var(--safe-bottom)); margin-top: 0; z-index: 1; }
+.imp-section + .hint { margin-top: -6px; }

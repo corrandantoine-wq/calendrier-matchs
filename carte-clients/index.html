@@ -41,7 +41,7 @@
     <div class="menu-sep"></div>
     <div class="menu-title">Base clients commune</div>
     <button data-action="add"><svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg>Ajouter un client</button>
-    <label class="menu-item"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>Importer un fichier CSV<input id="csvInput" type="file" accept=".csv,text/csv,text/plain" hidden></label>
+    <label class="menu-item"><svg viewBox="0 0 24 24"><path d="M12 4v11M7 10l5 5 5-5M5 20h14"/></svg>Importer un fichier (CSV, Excel)<input id="csvInput" type="file" accept=".csv,.txt,.xlsx,.xls,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel" hidden></label>
     <button data-action="export"><svg viewBox="0 0 24 24"><path d="M12 20V9M7 14l5-5 5 5M5 4h14"/></svg>Exporter en CSV</button>
     <button data-action="geocode"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c3 3.5 3 14.5 0 18M12 3c-3 3.5-3 14.5 0 18"/></svg>Géocoder les adresses manquantes</button>
     <div class="admin-only" hidden>
@@ -103,7 +103,10 @@
       <div class="dlg-grab"></div>
       <h2 id="dialogTitle">Nouveau client</h2>
       <input type="hidden" name="id">
-      <label>Nom *<input name="nom" required placeholder="Ex. Boulangerie Dupont"></label>
+      <div class="row">
+        <label>Nom *<input name="nom" required placeholder="Ex. Boulangerie Dupont"></label>
+        <label class="w-35">Code client<input name="code_client" placeholder="ERP"></label>
+      </div>
       <label>Adresse<input name="adresse" placeholder="Numéro et rue"></label>
       <div class="row">
         <label class="w-35">Code postal<input name="code_postal" inputmode="numeric"></label>
@@ -198,6 +201,32 @@
       <input id="fieldsSearch" class="dlg-input" type="search" placeholder="Filtrer les champs…">
       <ul id="fieldsList" class="pick-list checks"></ul>
       <div class="dialog-actions"><button class="btn ghost" data-close>Annuler</button><button id="fieldsSave" class="btn primary">Enregistrer</button></div>
+    </div>
+  </dialog>
+
+  <!-- Import d'un fichier (ERP, CSV, Excel) -->
+  <dialog id="importDialog" class="panel-dlg wide">
+    <div class="dlg-body">
+      <div class="dlg-grab"></div>
+      <h2>Importer des clients</h2>
+      <div id="impMap">
+        <p id="impFileInfo" class="hint"></p>
+        <div class="imp-section">Correspondance des colonnes</div>
+        <p class="hint">Indiquez quelle colonne de votre fichier correspond à chaque information. Les colonnes reconnues sont déjà remplies.</p>
+        <div id="impFields" class="imp-fields"></div>
+        <div class="imp-section">Aperçu</div>
+        <div class="imp-preview"><table id="impPreview"></table></div>
+        <div id="impSummary" class="imp-summary"></div>
+      </div>
+      <div id="impRun" hidden>
+        <ol id="impSteps" class="imp-steps"></ol>
+        <div class="imp-bar"><span id="impBar"></span></div>
+        <p id="impResult" class="imp-summary"></p>
+      </div>
+      <div class="dialog-actions">
+        <button id="impCancel" class="btn ghost" data-close>Annuler</button>
+        <button id="impGo" class="btn primary">Importer</button>
+      </div>
     </div>
   </dialog>
 
