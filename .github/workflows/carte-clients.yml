@@ -15,7 +15,7 @@ defaults:
 
 jobs:
   interface:
-    name: Interface (navigateur, mobile et ordinateur)
+    name: Interface (tests unitaires + navigateur, mobile et ordinateur)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -26,6 +26,8 @@ jobs:
           cache: npm
           cache-dependency-path: carte-clients/package-lock.json
       - run: npm ci
+      - name: Tests unitaires
+        run: npm run test:unit
       - run: npx playwright install --with-deps chromium
       - run: npx playwright test
       - name: Rapport en cas d'échec
